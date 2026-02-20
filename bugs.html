@@ -1,0 +1,503 @@
+"use client";
+
+/* ======================================================
+   🔐 FULL PRODUCTION BACKEND ARCHITECTURE (KV LUXURY)
+   ======================================================
+
+   1️⃣ PRISMA SCHEMA ( /prisma/schema.prisma )
+
+   datasource db {
+     provider = "postgresql"
+     url      = env("DATABASE_URL")
+   }
+
+   generator client {
+     provider = "prisma-client-js"
+   }
+
+   model User {
+     id        String   @id @default(cuid())
+     name      String?
+     email     String   @unique
+     role      Role     @default(PUBLIC)
+     orders    Order[]
+     createdAt DateTime @default(now())
+   }
+
+   model Product {
+     id          String   @id @default(cuid())
+     name        String
+     description String
+     price       Int
+     category    String
+     stock       Int
+     createdAt   DateTime @default(now())
+   }
+
+   model Order {
+     id        String   @id @default(cuid())
+     user      User     @relation(fields: [userId], references: [id])
+     userId    String
+     total     Int
+     status    String
+     createdAt DateTime @default(now())
+   }
+
+   enum Role {
+     PUBLIC
+     VIP
+     ADMIN
+   }
+
+   ======================================================
+   2️⃣ STRIPE CHECKOUT API ROUTE ( /app/api/checkout/route.ts )
+   ======================================================
+
+   import Stripe from "stripe";
+   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+
+   export async function POST(req: Request) {
+     const body = await req.json();
+
+     const session = await stripe.checkout.sessions.create({
+       payment_method_types: ["card"],
+       line_items: body.items.map((item: any) => ({
+         price_data: {
+           currency: "usd",
+           product_data: { name: item.name },
+           unit_amount: item.price * 100,
+         },
+         quantity: 1,
+       })),
+       mode: "payment",
+       success_url: `${process.env.NEXT_PUBLIC_URL}/success`,
+       cancel_url: `${process.env.NEXT_PUBLIC_URL}/cancel`,
+     });
+
+     return Response.json({ url: session.url });
+   }
+
+   ======================================================
+   3️⃣ ADMIN PANEL ROUTE STRUCTURE
+   ======================================================
+
+   /app/admin/page.tsx
+   - View all users
+   - Approve VIP requests
+   - Create / edit products
+   - View orders
+
+   Protect route using middleware:
+
+   // middleware.ts
+   import { getToken } from "next-auth/jwt";
+   export async function middleware(req) {
+     const token = await getToken({ req });
+     if (!token || token.role !== "ADMIN") {
+       return Response.redirect(new URL("/", req.url));
+     }
+   }
+
+   ======================================================
+   4️⃣ DEPLOYMENT BLUEPRINT
+   ======================================================
+
+   • Database → Neon / Supabase (PostgreSQL)
+   • Auth → NextAuth (JWT strategy)
+   • Payments → Stripe Live Mode
+   • Hosting → Vercel
+   • Image CDN → Cloudinary
+   • Monitoring → Sentry
+   • Analytics → Vercel Analytics
+
+   Production Steps:
+   1. npx prisma migrate deploy
+   2. Add ENV variables in Vercel dashboard
+   3. Enable Stripe Webhooks
+   4. Set NODE_ENV=production
+   5. Run security audit + rate limiting
+
+====================================================== */
+
+import { useState, useMemo, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+
+export default function KVLuxuryWebsite() {
+  // Removed Next.js router and useScroll hooks to prevent runtime errors
+  // Navigation now uses window.location for broader compatibility
+
+  const [cart, setCart] = useState([]);
+  const [showCart, setShowCart] = useState(false);
+  const [showVIP, setShowVIP] = useState(false);
+
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("All");
+  const [sort, setSort] = useState("default");
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const productsPerPage = 8;
+
+  const [darkMode, setDarkMode] = useState(true);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+
+  // AUTH + ROLE SYSTEM
+  const [user, setUser] = useState(null); // { name, role: 'public' | 'vip' | 'admin' }
+  const [showLogin, setShowLogin] = useState(false);
+
+  // Simulated backend API calls
+  const api = {
+    login: async (email) => {
+      // In real backend: validate JWT + fetch role from DB
+      if (email.includes("vip")) return { name: "VIP Client", role: "vip" };
+      if (email.includes("admin")) return { name: "Admin", role: "admin" };
+      return { name: "Client", role: "public" };
+    },
+    submitVIPRequest: async (data) => {
+      console.log("VIP Application Submitted:", data);
+      return { success: true };
+    },
+    checkout: async (cart) => {
+      console.log("Processing secure checkout:", cart);
+      return { success: true, orderId: "KV" + Date.now() };
+    }
+  };
+
+  const products = useMemo(() => {
+    const categories = ["Apparel", "Boots", "Accessories"];
+    return Array.from({ length: 100 }).map((_, i) => ({
+      id: i + 1,
+      name: `KV Black Label Item ${i + 1}`,
+      price: 800 + i * 15,
+      category: categories[i % 3],
+      description: "Crafted with premium western heritage materials.",
+    }));
+  }, []);
+
+  const filteredProducts = useMemo(() => {
+    let filtered = products.filter((p) =>
+      p.name.toLowerCase().includes(search.toLowerCase()) &&
+      (category === "All" || p.category === category)
+    );
+
+    if (sort === "priceLow") filtered = [...filtered].sort((a, b) => a.price - b.price);
+    if (sort === "priceHigh") filtered = [...filtered].sort((a, b) => b.price - a.price);
+
+    return filtered;
+  }, [products, search, category, sort]);
+
+  const totalPages = Math.ceil(filteredProducts.length / productsPerPage);
+  const paginatedProducts = filteredProducts.slice(
+    (currentPage - 1) * productsPerPage,
+    currentPage * productsPerPage
+  );
+
+  const addToCart = (product) => setCart([...cart, product]);
+  const total = cart.reduce((sum, item) => sum + item.price, 0);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, category]);
+
+  return (
+    <div className={`${darkMode ? "bg-black text-white" : "bg-white text-black"} min-h-screen transition-colors duration-500`}>
+
+      {/* NAV */}
+      <nav className="fixed w-full z-50 backdrop-blur-xl bg-gradient-to-r from-black/80 via-neutral-900/80 to-black/80 border-b border-yellow-500/20 shadow-[0_0_30px_rgba(234,179,8,0.15)]">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+          <h1
+            className="text-2xl tracking-widest font-semibold cursor-pointer"
+            onClick={() => (window.location.href = "/")}
+          >
+            KV
+          </h1>
+          <div className="flex gap-4 text-sm items-center">
+            <button onClick={() => (window.location.href = "/collections")}>Collections</button>
+            <button onClick={() => setShowCart(!showCart)}>Cart ({cart.length})</button>
+            <button onClick={() => setDarkMode(!darkMode)}>Theme</button>
+            {user ? (
+              <button onClick={() => setUser(null)}>Logout ({user.role})</button>
+            ) : (
+              <button onClick={() => setShowLogin(true)}>Login</button>
+            )}
+          </div>
+        </div>
+      </nav>
+
+      {/* HERO */}
+      <section className="relative h-screen flex flex-col justify-center items-center text-center overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(234,179,8,0.15),transparent_60%)] animate-pulse" />
+        <motion.h2
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="text-5xl md:text-7xl font-serif mb-6"
+        >
+          HOUSE OF KV
+        </motion.h2>
+        <p className="opacity-70">Western Power. Eternal Elegance.</p>
+      </section>
+
+      {/* COLLECTION SECTION WITH FIXED PARALLAX STYLE */}
+      <section
+        className="relative h-[600px] flex items-center justify-center text-center border-t border-neutral-800"
+        style={{
+          backgroundImage:
+            "url('https://images.unsplash.com/photo-1503342217505-b0a15ec3261c')",
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          backgroundAttachment: "fixed",
+        }}
+      >
+        <div className="absolute inset-0 bg-black/60" />
+        <div className="relative z-10 px-6">
+          <h3 className="text-5xl md:text-6xl font-serif mb-6">The KV Collection</h3>
+          <p className="max-w-2xl mx-auto opacity-80 text-lg">
+            Heritage western silhouettes reimagined through a modern luxury lens.
+          </p>
+        </div>
+      </section>
+
+      {/* CATEGORY TILES */}
+      <section className="max-w-7xl mx-auto px-6 py-20 grid md:grid-cols-3 gap-10">
+        {["Apparel", "Boots", "Accessories"].map((cat) => (
+          <motion.div
+            key={cat}
+            whileHover={{ scale: 1.05 }}
+            className="relative h-72 rounded-2xl overflow-hidden cursor-pointer bg-neutral-900 flex items-center justify-center"
+            onClick={() => setCategory(cat)}
+          >
+            <div className="text-2xl font-serif tracking-wide">{cat}</div>
+          </motion.div>
+        ))}
+      </section>
+
+      {/* FILTERS */}
+      <section className="max-w-7xl mx-auto px-6 mb-10 flex flex-wrap gap-4 justify-center">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search products..."
+          className="px-4 py-2 rounded bg-neutral-800 text-white"
+        />
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          className="px-4 py-2 rounded bg-neutral-800 text-white"
+        >
+          <option>All</option>
+          <option>Apparel</option>
+          <option>Boots</option>
+          <option>Accessories</option>
+        </select>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+          className="px-4 py-2 rounded bg-neutral-800 text-white"
+        >
+          <option value="default">Sort</option>
+          <option value="priceLow">Price Low → High</option>
+          <option value="priceHigh">Price High → Low</option>
+        </select>
+      </section>
+
+      {/* PRODUCT GRID */}
+      <section className="max-w-7xl mx-auto px-6 pb-24">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+          {paginatedProducts.map((product) => (
+            <motion.div
+              key={product.id}
+              whileHover={{ scale: 1.05 }}
+              className="bg-neutral-900/80 backdrop-blur-md p-6 rounded-2xl cursor-pointer border border-neutral-800 hover:border-yellow-500/40 transition-all duration-500 hover:shadow-[0_0_40px_rgba(234,179,8,0.25)]"
+              onClick={() => setSelectedProduct(product)}
+            >
+              <h4 className="mb-2">{product.name}</h4>
+              <p className="text-yellow-500 mb-2">${product.price}</p>
+              <p className="text-xs opacity-60">{product.category}</p>
+            </motion.div>
+          ))}
+        </div>
+
+        <div className="flex justify-center gap-4 mt-10 flex-wrap">
+          {Array.from({ length: totalPages }).map((_, i) => (
+            <button
+              key={i}
+              onClick={() => setCurrentPage(i + 1)}
+              className={`px-3 py-1 rounded ${
+                currentPage === i + 1 ? "bg-yellow-500 text-black" : "bg-neutral-800"
+              }`}
+            >
+              {i + 1}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* PRODUCT MODAL */}
+      <AnimatePresence>
+        {selectedProduct && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-6"
+          >
+            <div className="bg-neutral-900 p-8 rounded-2xl w-full max-w-md">
+              <h3 className="text-xl mb-2">{selectedProduct.name}</h3>
+              <p className="mb-2">{selectedProduct.description}</p>
+              <p className="text-yellow-500 mb-4">${selectedProduct.price}</p>
+              <button
+                onClick={() => addToCart(selectedProduct)}
+                className="w-full py-2 bg-yellow-500 text-black rounded mb-2"
+              >
+                Add to Cart
+              </button>
+              <button
+                onClick={() => setSelectedProduct(null)}
+                className="w-full py-2 bg-neutral-700 rounded"
+              >
+                Close
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* CART */}
+      {showCart && (
+        <div className="fixed right-0 top-0 h-full w-96 bg-neutral-950 p-6 overflow-y-auto">
+          <h3 className="mb-4">Your Cart</h3>
+          {cart.map((item, i) => (
+            <div key={i} className="mb-3">
+              <p>{item.name}</p>
+              <p className="text-yellow-500">${item.price}</p>
+            </div>
+          ))}
+          <p className="mt-4">Total: ${total}</p>
+          <button
+            onClick={async () => {
+              const res = await api.checkout(cart);
+              if (res.success) alert('Order Confirmed: ' + res.orderId);
+            }}
+            className="w-full mt-4 py-2 bg-yellow-500 text-black rounded"
+          >
+            Secure Checkout
+          </button>
+        </div>
+      )}
+
+            {/* VIP SECTION */}
+      <section className="relative py-24 border-t border-neutral-800 bg-gradient-to-b from-black via-neutral-950 to-black overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(234,179,8,0.12),transparent_70%)]" />
+        <div className="max-w-5xl mx-auto px-6 text-center">
+          <h3 className="text-4xl md:text-5xl font-serif mb-6">KV Private Client Circle</h3>
+          <p className="opacity-70 max-w-2xl mx-auto mb-10">
+            Invitation-only access to limited capsule drops, concierge styling,
+            priority delivery, and exclusive western heritage pieces.
+          </p>
+
+          <div className="grid md:grid-cols-3 gap-8 mb-12">
+            <div className="bg-neutral-900/80 backdrop-blur-md p-8 rounded-2xl border border-neutral-800 hover:border-yellow-500/40 transition-all duration-500 hover:shadow-[0_0_35px_rgba(234,179,8,0.25)]">
+              <h4 className="mb-3 text-lg">Early Access</h4>
+              <p className="text-sm opacity-60">Shop collections 48 hours before public release.</p>
+            </div>
+            <div className="bg-neutral-900/80 backdrop-blur-md p-8 rounded-2xl border border-neutral-800 hover:border-yellow-500/40 transition-all duration-500 hover:shadow-[0_0_35px_rgba(234,179,8,0.25)]">
+              <h4 className="mb-3 text-lg">Personal Concierge</h4>
+              <p className="text-sm opacity-60">Dedicated stylist & private shopping assistance.</p>
+            </div>
+            <div className="bg-neutral-900/80 backdrop-blur-md p-8 rounded-2xl border border-neutral-800 hover:border-yellow-500/40 transition-all duration-500 hover:shadow-[0_0_35px_rgba(234,179,8,0.25)]">
+              <h4 className="mb-3 text-lg">Elite Rewards</h4>
+              <p className="text-sm opacity-60">Points tracking, milestone gifts & VIP events.</p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setShowVIP(!showVIP)}
+            className="px-10 py-3 bg-gradient-to-r from-yellow-500 to-yellow-400 text-black rounded-2xl text-sm tracking-wide hover:scale-105 transition-all duration-500 shadow-[0_0_25px_rgba(234,179,8,0.4)] hover:shadow-[0_0_45px_rgba(234,179,8,0.7)]"
+          >
+            Request Invitation
+          </button>
+        </div>
+      </section>
+
+      {/* VIP MODAL */}
+      <AnimatePresence>
+        {showVIP && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-6"
+          >
+            <div className="bg-neutral-900 p-10 rounded-2xl w-full max-w-lg border border-neutral-800">
+              <h3 className="text-2xl mb-4 font-serif">VIP Access Request</h3>
+              <input
+                placeholder="Full Name"
+                className="w-full mb-4 px-4 py-2 rounded bg-neutral-800 text-white"
+              />
+              <input
+                placeholder="Email Address"
+                className="w-full mb-4 px-4 py-2 rounded bg-neutral-800 text-white"
+              />
+              <textarea
+                placeholder="Why do you want to join the KV Private Circle?"
+                className="w-full mb-6 px-4 py-2 rounded bg-neutral-800 text-white"
+              />
+              <button
+                onClick={async () => {
+                  await api.submitVIPRequest({ status: 'pending' });
+                  alert('Application Submitted');
+                  setShowVIP(false);
+                }}
+                className="w-full py-3 bg-yellow-500 text-black rounded mb-3"
+              >
+                Submit Application
+              </button>
+              <button
+                onClick={() => setShowVIP(false)}
+                className="w-full py-3 bg-neutral-700 rounded"
+              >
+                Close
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* LOGIN MODAL */}
+      <AnimatePresence>
+        {showLogin && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-6"
+          >
+            <div className="bg-neutral-900 p-8 rounded-2xl w-full max-w-md border border-neutral-800">
+              <h3 className="text-xl mb-4">Client Login</h3>
+              <input
+                placeholder="Enter email (vip@ / admin@ for demo roles)"
+                className="w-full mb-4 px-4 py-2 rounded bg-neutral-800 text-white"
+                onKeyDown={async (e) => {
+                  if (e.key === 'Enter') {
+                    const res = await api.login(e.target.value);
+                    setUser(res);
+                    setShowLogin(false);
+                  }
+                }}
+              />
+              <button
+                onClick={() => setShowLogin(false)}
+                className="w-full py-2 bg-neutral-700 rounded"
+              >
+                Close
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <footer className="py-10 text-center opacity-50 border-t border-neutral-800">
+        ©️ 2026 KV Luxury House — Private Client Edition
+      </footer>
+    </div>
+  );
+}
